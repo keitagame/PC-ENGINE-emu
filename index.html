@@ -635,7 +635,7 @@ function run() {
 
     vdc.clear(0x002244)
     vdc.render()
-
+    document.getElementById("pc").textContent = `0x${cpu.pc.toString(16).toUpperCase().padStart(4, '0')}`;
     requestAnimationFrame(frame)
   }
   frame()
