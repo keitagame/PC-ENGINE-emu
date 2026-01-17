@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>NES</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="nes.png" type="image/png">
+    <style>
+       :root {
+        color-scheme: light dark;
+      }
+      @font-face {
+  font-family: "Renner";
+  src: url("./Renner.ttf") format("truetype");
+  font-display: swap;
+ 
+}
+      body {
+        background:rgb(0, 0, 0);
+       font-family: "Renner", sans-serif;
+        margin: 0;
+        padding:0;
+      }
+h1{
+font-weight:300;
+font-size:25px;
+}
+      header {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      canvas{
+        
+        height: 100%;              /* コンテナ幅に合わせる */
+      aspect-ratio: 256 / 240;  /* 内部解像度の比率を維持 */
+        image-rendering: pixelated;
+        border: 1px solid #000000;
+        background: #000;
+      }
+      .row {
+        padding-top:0px;
+height:83vh;
+justify-content: center; 
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .mono {
+       font-size:20px; 
+      }
+      small {
+        opacity: 0.7;
+      }
+      
+button{
+font-family: "Renner", sans-serif;
+padding:10px;
+background:rgb(0, 0, 0);
+color:rgb(255, 255, 255);
+border:1px solid rgb(255, 255, 255);
+}
+.file-input {
+  display: none; /* 本体は隠す */
+}
+
+.file-label {
+  display: inline-block;
+  padding: 10px 16px;
+  background: #000000;
+  color: white;
+    border:1px solid white;
+  border-radius: 0px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+
+
+    </style>
+  </head>
+  <body>
+   
+    <header>
+<h1>FAMICOMU</h1>
+      <select id="romSelect">
+  <option value="">-- サーバーROMを選択 --</option>
+  <option value="snow.nes">snow.nes</option>
+  <option value="cmc.nes">cmc.nes</option>
+  <option value="roms/sw.nes">sw.nes</option>
+  <option value="roms/bs.nes">bs.nes</option>
+    <option value="roms/dh2.nes">dh.nes</option>
+  
+</select>
+<label class="file-label">
+  Select
+  <input id="rom" type="file" class="file-input">
+</label>
+<span id="file-name"></span>
+
+      
+      <button id="fullscreenBtn">Fullscreen</button>
+
+      <button id="start" disabled>Start</button>
+      <div class="mono" id="status">No ROM</div>
+      <div><span class="mono">CPU PC:</span> <span id="pc" class="mono">0x0000</span></div>
+    </header>
+    <div class="row">
+      <canvas id="screen" width="256" height="240"></canvas>
+      <div style="display:none">
+        <div><b>FPS:</b> <span id="fps">0</span></div>
+        <div><b>CPU PC:</b> <span id="pc" class="mono">0x0000</span></div>
+        <div><b>Cycles:</b> <span id="cyc" class="mono">0</span></div>
+        <div><b>VRAM V:</b><span id="pcp" class="mono">0x0000</span></div>
+        <div><b>VRAM T:</b><span id="ppx" class="mono">0x0000</span></div>
+        <div><b>CPU S:</b><span id="ram" class="mono">0x0000</span></div>
+        <div><b>CPU P:</b><span id="mapper" class="mono">0x0000</span></div>
+
+        <small
+          >Skeleton: Mapper0, iNES, PPU frame timing + NMI, CPU bus/IRQs, opcode
+          hooks</small
+        >
+      </div>
+    </div>
+
+    
+
+    <script type="module">
+      const u8 = (n) => n & 0xff;
+      const u16 = (n) => n & 0xffff;
+      const lo = (n) => n & 0xff;
+      const hi = (n) => (n >> 8) & 0xff;
+      
+      
+function loadPCE(buffer) {
+  return new Uint8Array(buffer)
+}
+
+
+class VDC {
+  constructor(ctx) {
+    this.ctx = ctx
+    this.fb = new Uint32Array(256 * 240)
+  }
+
+  clear(color = 0x000000) {
+    this.fb.fill(color)
+  }
+
+  render() {
+    const img = this.ctx.createImageData(256, 240)
+    for (let i = 0; i < this.fb.length; i++) {
+      const c = this.fb[i]
+      img.data[i * 4 + 0] = (c >> 16) & 0xff
+      img.data[i * 4 + 1] = (c >> 8) & 0xff
+      img.data[i * 4 + 2] = c & 0xff
+      img.data[i * 4 + 3] = 255
+    }
+    this.ctx.putImageData(img, 0, 0)
+  }
+}
+
+class HuC6280 {
+  constructor(bus) {
+    this.bus = bus
+    this.pc = 0
+    this.a = 0
+    this.x = 0
+    this.y = 0
+    this.sp = 0xff
+    this.p = 0x20
+  }
+
+  reset() {
+    // PCエンジンは通常 $FFFE ベクタ
+    const lo = this.bus.read(0xfffe)
+    const hi = this.bus.read(0xffff)
+    this.pc = lo | (hi << 8)
+  }
+
+  step() {
+    const opcode = this.bus.read(this.pc++)
+    
+    switch (opcode) {
+      case 0xea: // NOP
+        break
+
+      default:
+        console.log("UNKNOWN OPCODE", opcode.toString(16))
+        break
+    }
+  }
+}
+
+
+class Bus {
+  constructor(rom, vdc) {
+    this.rom = rom
+    this.vdc = vdc
+    this.ram = new Uint8Array(0x2000) // 8KB
+  }
+
+  read(addr) {
+    addr &= 0xffff
+
+    if (addr < 0x2000) return this.ram[addr]
+
+    // VDC（今はダミー）
+    if (addr >= 0x0000 && addr <= 0x1fff) {
+      return 0
+    }
+
+    // ROM $8000-$FFFF
+    if (addr >= 0x8000) {
+      return this.rom[addr - 0x8000]
+    }
+
+    return 0
+  }
+
+  write(addr, val) {
+    addr &= 0xffff
+    val &= 0xff
+
+    if (addr < 0x2000) {
+      this.ram[addr] = val
+      return
+    }
+
+    // VDC（未実装）
+  }
+}
+
+      // ---------- UI / Main loop ----------
+      const canvas = document.getElementById("screen")
+const ctx = canvas.getContext("2d")
+
+let cpu, bus, vdc, rom
+
+document.getElementById("rom").addEventListener("change", e => {
+  const file = e.target.files[0]
+  const reader = new FileReader()
+
+  reader.onload = () => {
+    rom = loadPCE(reader.result)
+
+    vdc = new VDC(ctx)
+    bus = new Bus(rom, vdc)
+    cpu = new HuC6280(bus)
+
+    cpu.reset()
+    run()
+  }
+
+  reader.readAsArrayBuffer(file)
+})
+function run() {
+  function frame() {
+    // 適当な命令数
+    for (let i = 0; i < 5000; i++) {
+      cpu.step()
+    }
+
+    vdc.clear(0x002244)
+    vdc.render()
+
+    requestAnimationFrame(frame)
+  }
+  frame()
+}
+
+
+    </script>
+
+
+  </body>
+</html>
