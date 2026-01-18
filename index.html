@@ -307,7 +307,9 @@ class HuC6280 {
     this.sp = 0xff
     this.p = 0x34 // NV-BDIZC
     this.cycles = 0
-    
+    this.inIRQ = false
+this.irqPending = false
+
     // Flags
     this.FLAG_C = 0x01
     this.FLAG_Z = 0x02
@@ -336,6 +338,28 @@ class HuC6280 {
   this.y = 0
 }
 
+doIRQ(vector) {
+  // Iフラグが立ってたら入らない
+  if (this.p & this.FLAG_I) return
+  if (this.inIRQ) return
+
+  this.inIRQ = true
+
+  // PC → スタック
+  this.push((this.pc >> 8) & 0xff)
+  this.push(this.pc & 0xff)
+
+  // P → スタック（B=0）
+  this.push(this.p & ~this.FLAG_B)
+
+  // IRQ禁止
+  this.setFlag(this.FLAG_I, true)
+
+  // ベクタジャンプ
+  const lo = this.bus.read(vector)
+  const hi = this.bus.read(vector + 1)
+  this.pc = (hi << 8) | lo
+}
 
   getFlag(flag) { return (this.p & flag) !== 0 }
   setFlag(flag, val) { 
@@ -400,11 +424,16 @@ aby() {
 }
 
   ind() {
-    const ptr = this.abs()
-    const lo = this.bus.read(ptr)
-    const hi = this.bus.read((ptr + 1) & 0xffff)
-    return (hi << 8) | lo
-  }
+  const ptr = this.abs()
+  const lo = this.bus.read(ptr)
+
+  // ★ 6502 バグ再現（ページ跨ぎ禁止）
+  const hiAddr = (ptr & 0xFF00) | ((ptr + 1) & 0x00FF)
+  const hi = this.bus.read(hiAddr)
+
+  return (hi << 8) | lo
+}
+
   izx() {
     const base = (this.bus.read(this.pc++) + this.x) & 0xff
     const lo = this.bus.read(base)
@@ -439,16 +468,23 @@ const b2  = bus.read(pc + 2)
 if (!this.getFlag(this.FLAG_I) && (bus.irqStatus & 0x07)) {
   this.irq()
 }
-if (op === 0x00 || op === 0xff) {
+
   console.log(
     "PC", hex16(this.pc - 1),
     "OP", hex8(op),
     "A", hex8(this.a),
     "MPR", [...this.bus.mpr].map(hex8).join(" ")
   )
+
+
+if (this.pc == 0x0000) {
+  console.error(
+    "[PC ZERO]",
+    "lastOP=", hex8(this.lastOpcode),
+    "SP=", hex8(this.sp)
+  )
+  debugger
 }
-
-
 
   
     switch (op) {
@@ -471,6 +507,60 @@ if (op === 0x00 || op === 0xff) {
       case 0x39: { this.a &= this.bus.read(this.aby()); this.updateNZ(this.a); this.cycles += 4; break }
       case 0x21: { this.a &= this.bus.read(this.izx()); this.updateNZ(this.a); this.cycles += 6; break }
       case 0x31: { this.a &= this.bus.read(this.izy()); this.updateNZ(this.a); this.cycles += 5; break }
+case 0x80: { // BRA rel
+  const off = this.bus.read(this.pc++)
+  const s = off < 0x80 ? off : off - 0x100
+  this.pc = (this.pc + s) & 0xffff
+  this.cycles += 4
+  break
+}
+case 0x03: { // ST0 imm
+  const v = this.bus.read(this.pc++)
+  this.bus.write(0x0000, v)
+  this.cycles += 4
+  break
+}
+
+case 0x13: { // ST1 imm
+  const v = this.bus.read(this.pc++)
+  this.bus.write(0x0002, v)
+  this.cycles += 4
+  break
+}
+
+case 0x23: { // ST2 imm
+  const v = this.bus.read(this.pc++)
+  this.bus.write(0x0003, v)
+  this.cycles += 4
+  break
+}
+case 0x0F: // BBR0 zp,rel
+case 0x1F:
+case 0x2F:
+case 0x3F:
+case 0x4F:
+case 0x5F:
+case 0x6F:
+case 0x7F: {
+  this.pc += 2 // zp + rel をスキップ
+  this.cycles += 5
+  break
+}
+case 0xAF: { // LAX abs
+  const addr = this.abs()
+  const v = this.bus.read(addr)
+  this.a = v
+  this.x = v
+  this.updateNZ(v)
+  this.cycles += 4
+  break
+}
+case 0x32: { // SAX zp
+  const a = this.zp()
+  this.bus.write(a, this.a & this.x)
+  this.cycles += 3
+  break
+}
 
 case 0x64: { // STZ zp
   const a = this.zp()
@@ -542,24 +632,22 @@ case 0x43: { // TMA #imm
       case 0x2c: { const v = this.bus.read(this.abs()); this.bit(v); this.cycles += 4; break }
 
       // BRK
-      case 0x00: {
-        this.pc++
-        this.push((this.pc >> 8) & 0xff)
-        this.push(this.pc & 0xff)
-        this.push(this.p | this.FLAG_B)
-        this.setFlag(this.FLAG_I, true)
-        const lo = this.bus.read(0xfff6)
-        const hi = this.bus.read(0xfff7)
-        this.pc = (hi << 8) | lo
-        this.cycles += 7
-console.log(
-  "BRK vector",
-  hex8(bus.read(0xFFF6)),
-  hex8(bus.read(0xFFF7))
-)
+     case 0x00: { // BRK
+  // PC はすでに次を指している
+  this.push((this.pc >> 8) & 0xff)
+  this.push(this.pc & 0xff)
+  this.push(this.p | this.FLAG_B)
 
-        break
-      }
+  this.setFlag(this.FLAG_I, true)
+
+  const lo = this.bus.read(0xFFFE)
+  const hi = this.bus.read(0xFFFF)
+  this.pc = (hi << 8) | lo
+  this.cycles += 7
+  break
+}
+
+
 
       // CLC, CLD, CLI, CLV
       case 0x18: this.setFlag(this.FLAG_C, false); this.cycles += 2; break
@@ -697,14 +785,24 @@ console.log(
       case 0x7e: { const a = this.abx(); this.bus.write(a, this.ror(this.bus.read(a))); this.cycles += 7; break }
 
       // RTI
-      case 0x40: {
-        this.p = (this.pop() & 0xef) | 0x20
-        const lo = this.pop()
-        const hi = this.pop()
-        this.pc = (hi << 8) | lo
-        this.cycles += 6
-        break
-      }
+     case 0x40: { // RTI
+console.error(
+    "[RTI]",
+    "PC(before)=", hex16(this.pc),
+    "SP=", hex8(this.sp),
+    
+  )
+  this.p = (this.pop() & 0xEF) | 0x20
+  const pcl = this.pop()
+  const pch = this.pop()
+  this.pc = (pch << 8) | pcl
+  this.inIRQ = false
+console.error("[RTI] PC(after)=", hex16(this.pc))
+
+  this.cycles += 6
+  break
+}
+
 
       // RTS
       case 0x60: {
@@ -760,9 +858,16 @@ console.log(
       case 0x98: this.a = this.y; this.updateNZ(this.a); this.cycles += 2; break
 
       default:
+throw new Error(
+    `UNIMPL OPCODE ${hex8(op)} at ${hex16(this.pc - 1)}`
+  )
         this.cycles += 2
         break
     }
+if (this.irqPending) {
+    this.irqPending = false
+    this.doIRQ(0xFFF6) // VDC IRQ
+  }
   }
 
   adc(val) {
@@ -1092,7 +1197,7 @@ const ctx = canvas.getContext("2d")
 let cpu, bus, vdc, rom
 document.getElementById("start").addEventListener("click", () => {
   if (rom) {
-    cpu.reset()
+    //cpu.reset()
     run()
   } else {
     alert("Please load a ROM first.")
@@ -1107,6 +1212,7 @@ document.getElementById("rom").addEventListener("change", e => {
 
     vdc = new VDC(ctx)
     bus = new Bus(rom, vdc)
+initMPR.call(bus)
     cpu = new HuC6280(bus)
 const romBanks = Math.ceil(rom.length / 0x2000)
 console.log("romBank:"+romBanks);
@@ -1123,7 +1229,7 @@ bus.mpr.set([
   0x80 + last     // $E000-$FFFF ← RESET
 ])
 
-    //cpu.reset()
+    cpu.reset()
     //run()
   }
 
@@ -1134,11 +1240,12 @@ function run() {
     // 適当な命令数
     for (let i = 0; i < 5000; i++) {
       cpu.step()
+      document.getElementById("pc").textContent = `0x${cpu.pc.toString(16)}`;
     }
 
     vdc.clear(0x002244)
     vdc.render()
-    document.getElementById("pc").textContent = `0x${cpu.pc.toString(16)}`;
+    
     requestAnimationFrame(frame)
   }
   frame()
