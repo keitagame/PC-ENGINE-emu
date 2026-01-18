@@ -122,7 +122,20 @@ border:1px solid rgb(255, 255, 255);
       const lo = (n) => n & 0xff;
       const hi = (n) => (n >> 8) & 0xff;
       
-      
+      function initMPR() {
+  const banks = Math.ceil(this.rom.length / 0x2000)
+  const last = banks - 1
+
+  this.mpr[0] = 0x00        // RAM
+  this.mpr[1] = 0x01
+  this.mpr[2] = 0x80 + (last - 3)
+  this.mpr[3] = 0x80 + (last - 2)
+  this.mpr[4] = 0x80 + (last - 1)
+  this.mpr[5] = 0x80 + last
+  this.mpr[6] = 0x80 + last
+  this.mpr[7] = 0x80 + last
+}
+
 function loadPCE(buf) {
   let rom = new Uint8Array(buf)
 
@@ -167,9 +180,11 @@ class VDC {
     }
   }
 readStatus() {
-    // 無条件で VBlank ビットだけ立てる
-    return 0x20
-  }
+  const v = this.status
+  this.status &= ~0x20
+  return v | 0x20   // VBlankは常に立つ（最初はOK）
+}
+
   writeRegister(port, value) {
     if (port === 0) {
       // Register select
@@ -332,6 +347,14 @@ class HuC6280 {
   this.bus.write(0x0100 | this.sp, val & 0xff)
   this.sp = (this.sp - 1) & 0xff
 }
+tickTimer() {
+  if (!this.timerEnabled) return
+  this.timerValue--
+  if (this.timerValue < 0) {
+    this.timerValue = this.timerLatch
+    this.irqStatus |= 0x04
+  }
+}
 
 pop() {
   this.sp = (this.sp + 1) & 0xff
@@ -413,6 +436,17 @@ const pc = cpu.pc
 
 const b1  = bus.read(pc + 1)
 const b2  = bus.read(pc + 2)
+if (!this.getFlag(this.FLAG_I) && (bus.irqStatus & 0x07)) {
+  this.irq()
+}
+if (op === 0x00 || op === 0xff) {
+  console.log(
+    "PC", hex16(this.pc - 1),
+    "OP", hex8(op),
+    "A", hex8(this.a),
+    "MPR", [...this.bus.mpr].map(hex8).join(" ")
+  )
+}
 
 
 
@@ -437,6 +471,54 @@ const b2  = bus.read(pc + 2)
       case 0x39: { this.a &= this.bus.read(this.aby()); this.updateNZ(this.a); this.cycles += 4; break }
       case 0x21: { this.a &= this.bus.read(this.izx()); this.updateNZ(this.a); this.cycles += 6; break }
       case 0x31: { this.a &= this.bus.read(this.izy()); this.updateNZ(this.a); this.cycles += 5; break }
+
+case 0x64: { // STZ zp
+  const a = this.zp()
+  this.bus.write(a, 0)
+  this.cycles += 3
+  break
+}
+case 0x74: { // STZ zp,X
+  const a = this.zpx()
+  this.bus.write(a, 0)
+  this.cycles += 4
+  break
+}
+case 0x9C: { // STZ abs
+  const a = this.abs()
+  this.bus.write(a, 0)
+  this.cycles += 4
+  break
+}
+case 0x9E: { // STZ abs,X
+  const a = this.abx()
+  this.bus.write(a, 0)
+  this.cycles += 5
+  break
+}
+case 0x53: { // TAM #imm
+  const mask = this.bus.read(this.pc++)
+  for (let i = 0; i < 8; i++) {
+    if (mask & (1 << i)) {
+      this.bus.mpr[i] = this.a
+    }
+  }
+  this.cycles += 5
+  break
+}
+case 0x43: { // TMA #imm
+  const mask = this.bus.read(this.pc++)
+  for (let i = 0; i < 8; i++) {
+    if (mask & (1 << i)) {
+      this.a = this.bus.mpr[i]
+      break
+    }
+  }
+  this.updateNZ(this.a)
+  this.cycles += 4
+  break
+}
+
 
       // ASL
       case 0x0a: { this.a = this.asl(this.a); this.cycles += 2; break }
@@ -470,6 +552,12 @@ const b2  = bus.read(pc + 2)
         const hi = this.bus.read(0xfff7)
         this.pc = (hi << 8) | lo
         this.cycles += 7
+console.log(
+  "BRK vector",
+  hex8(bus.read(0xFFF6)),
+  hex8(bus.read(0xFFF7))
+)
+
         break
       }
 
@@ -672,7 +760,6 @@ const b2  = bus.read(pc + 2)
       case 0x98: this.a = this.y; this.updateNZ(this.a); this.cycles += 2; break
 
       default:
-        console.warn(`Unknown opcode: ${op.toString(16).toUpperCase().padStart(2, '0')} at PC=${(this.pc-1).toString(16).toUpperCase()}`)
         this.cycles += 2
         break
     }
@@ -760,7 +847,16 @@ class Bus {
     addr &= 0xffff
     
     // RAM: $0000-$1FFF
-    
+    // ---- HuC6280 ベクタ ----
+if (
+  addr === 0xFFFE || addr === 0xFFFF || // RESET
+  addr === 0xFFF6 || addr === 0xFFF7    // BRK / IRQ
+) {
+  const page = 7                     // $E000-$FFFF
+  const bank = this.mpr[page] - 0x80
+  const offset = addr & 0x1FFF
+  return this.rom[(bank * 0x2000) + offset] ?? 0
+}
     
     // I/O: $0000-$1FFF (mirrored with RAM in some configs)
     // VDC: $0000-$03FF
@@ -803,8 +899,9 @@ if (addr >= 0x0000 && addr <= 0x0003) {
     }
     // Expansion: $1800-$1FFF
     // Bus.read 内
-if (addr === 0xFFF6) return this.read(0xFFFE)
-if (addr === 0xFFF7) return this.read(0xFFFF)
+// IRQ / BRK vector
+
+
 
     // Memory mapping
     const page = (addr >> 13) & 0x07
