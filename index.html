@@ -332,7 +332,7 @@ this.irqPending = false
   )
 
   this.pc = (hi << 8) | lo
-  this.sp = 0xfd
+  this.sp = 0xff
   this.p = 0x34 | this.FLAG_I   // ← IRQ disable
   this.a = 0
   this.x = 0
@@ -340,33 +340,25 @@ this.irqPending = false
 }
 
 doIRQ(vector) {
-  // Iフラグが立ってたら入らない
   if (this.p & this.FLAG_I) return
   if (this.inIRQ) return
 
   this.inIRQ = true
 
-  // PC → スタック
   this.push((this.pc >> 8) & 0xff)
   this.push(this.pc & 0xff)
-
-  // P → スタック（B=0）
   this.push(this.p & ~this.FLAG_B)
 
-  // IRQ禁止
-  this.setFlag(this.FLAG_I, true)
+  
 
-  // ベクタジャンプ
+  // ★ IRQ要求クリア（最重要）
+  this.bus.irqStatus = 0
+
   const lo = this.bus.read(vector)
-  const hi = this.bus.read(vector + 1)
+  const hi = this.bus.read((vector + 1) & 0xffff)
   this.pc = (hi << 8) | lo
 }
 
-  getFlag(flag) { return (this.p & flag) !== 0 }
-  setFlag(flag, val) { 
-    if (val) this.p |= flag
-    else this.p &= ~flag
-  }
 
   push(val) {
   this.bus.write(0x0100 | this.sp, val & 0xff)
@@ -395,8 +387,11 @@ pop() {
 
   // Addressing modes
   imm() {
-  return this.pc++
+  const val = this.bus.read(this.pc)
+  this.pc = (this.pc + 1) & 0xffff
+  return val
 }
+
 
 zp() {
   return this.bus.read(this.pc++) & 0xff
@@ -415,7 +410,13 @@ abs() {
   const hi = this.bus.read(this.pc++)
   return (hi << 8) | lo
 }
-
+getFlag(flag) {
+  return (this.p & flag) !== 0
+}
+setFlag(flag, val) {
+  if (val) this.p |= flag
+  else this.p &= ~flag
+}
 abx() {
   return (this.abs() + this.x) & 0xffff
 }
@@ -460,12 +461,10 @@ return (((hi << 8) | lo) + this.y) & 0xffff
   }
 
   step() {
-    const op = this.bus.read(this.pc++)
-const pc = cpu.pc
-
-
-const b1  = bus.read(pc + 1)
-const b2  = bus.read(pc + 2)
+   
+   const pc = this.pc
+  const op = this.bus.read(this.pc)
+  this.pc = (this.pc + 1) & 0xffff
 //if (!this.getFlag(this.FLAG_I) && (bus.irqStatus & 0x07)) {
 //  this.irq()
 //}
@@ -473,14 +472,9 @@ const b2  = bus.read(pc + 2)
  
 
 
-if (this.pc == 0x0000) {
-  console.error(
-    "[PC ZERO]",
-    "lastOP=", hex8(this.lastOpcode),
-    "SP=", hex8(this.sp)
-  )
-  debugger
-}
+
+console.log(this.pc.toString(16),op.toString(16));
+
 
   
     switch (op) {
@@ -627,21 +621,22 @@ case 0x43: { // TMA #imm
       case 0x24: { const v = this.bus.read(this.zp()); this.bit(v); this.cycles += 3; break }
       case 0x2c: { const v = this.bus.read(this.abs()); this.bit(v); this.cycles += 4; break }
 
-      // BRK
-     case 0x00: { // BRK
-  // PC はすでに次を指している
+    case 0x00: { // BRK
+  // PC はすでに +1 されている前提
   this.push((this.pc >> 8) & 0xff)
   this.push(this.pc & 0xff)
-  this.push(this.p | this.FLAG_B)
 
+  this.push(this.p | this.FLAG_B)
   this.setFlag(this.FLAG_I, true)
 
   const lo = this.bus.read(0xFFFE)
   const hi = this.bus.read(0xFFFF)
   this.pc = (hi << 8) | lo
+
   this.cycles += 7
   break
 }
+
 
 
 
@@ -706,15 +701,19 @@ case 0x43: { // TMA #imm
       case 0x6c: this.pc = this.ind(); this.cycles += 6; break
 
       // JSR
-      case 0x20: {
-        const addr = this.abs()
-        const ret = (this.pc - 1) & 0xffff
-        this.push((ret >> 8) & 0xff)
-        this.push(ret & 0xff)
-        this.pc = addr
-        this.cycles += 6
-        break
-      }
+     case 0x20: { // JSR abs
+  const addr = this.abs()
+  const ret = (this.pc - 1) & 0xffff
+
+  // ★ 正しい順序（LO → HI）
+  this.push(ret & 0xff)
+  this.push((ret >> 8) & 0xff)
+
+  this.pc = addr
+  this.cycles += 6
+  break
+}
+
 
       // LDA
       case 0xa9: this.a = this.bus.read(this.imm()); this.updateNZ(this.a); this.cycles += 2; break
@@ -854,10 +853,10 @@ throw new Error(
         this.cycles += 2
         break
     }
-if (this.irqPending) {
-    this.irqPending = false
-    this.doIRQ(0xFFF6) // VDC IRQ
-  }
+//if (this.irqPending) {
+//    this.irqPending = false
+ //   this.doIRQ(0xFFF6) // VDC IRQ
+ // }
   }
 
   adc(val) {
