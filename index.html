@@ -179,6 +179,11 @@ class VDC {
       this.palette[i] = (gray << 16) | (gray << 8) | gray
     }
   }
+ tick() {
+  // 疑似 VBlank
+  this.status |= 0x20
+}
+
 readStatus() {
   const v = this.status
   this.status &= ~0x20
@@ -322,9 +327,11 @@ this.irqPending = false
     this.FLAG_N = 0x80
   }
 
-  reset() {
+ 
+reset() {
   const lo = this.bus.read(0xfffe)
   const hi = this.bus.read(0xffff)
+
   console.log(
     '[RESET]',
     'FFFE=', lo.toString(16),
@@ -332,12 +339,16 @@ this.irqPending = false
   )
 
   this.pc = (hi << 8) | lo
-  this.sp = 0xff
-  this.p = 0x34 | this.FLAG_I   // ← IRQ disable
+
+  this.sp = 0xFF
+  this.p  = this.FLAG_I | 0x20   // ★ 正しい初期P
+  this.inIRQ = false             // ★ 忘れがち
+
   this.a = 0
   this.x = 0
   this.y = 0
 }
+
 
 doIRQ(vector) {
   if (this.p & this.FLAG_I) return
@@ -350,7 +361,7 @@ doIRQ(vector) {
   this.push(this.p & ~this.FLAG_B)
 
   
-
+this.setFlag(this.FLAG_I, true)
   // ★ IRQ要求クリア（最重要）
   this.bus.irqStatus = 0
 
@@ -417,6 +428,15 @@ setFlag(flag, val) {
   if (val) this.p |= flag
   else this.p &= ~flag
 }
+tickTimer() {
+  if (!this.timerEnabled) return
+  this.timerValue--
+  if (this.timerValue < 0) {
+    this.timerValue = this.timerLatch
+    this.bus.irqStatus |= 0x04
+  }
+}
+
 abx() {
   return (this.abs() + this.x) & 0xffff
 }
@@ -461,7 +481,11 @@ return (((hi << 8) | lo) + this.y) & 0xffff
   }
 
   step() {
-   
+   if (!this.getFlag(this.FLAG_I) && (this.bus.irqStatus & 0x04)) {
+    this.bus.irqStatus = 0
+    this.doIRQ(0xFFF6)
+    return
+  }
    const pc = this.pc
   const op = this.bus.read(this.pc)
   this.pc = (this.pc + 1) & 0xffff
@@ -1230,6 +1254,7 @@ function run() {
     // 適当な命令数
     for (let i = 0; i < 5000; i++) {
       cpu.step()
+      vdc.tick()
       document.getElementById("pc").textContent = `0x${cpu.pc.toString(16)}`;
     }
 
