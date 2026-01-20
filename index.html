@@ -182,8 +182,9 @@ class VDC {
 readStatus() {
   const v = this.status
   this.status &= ~0x20
-  return v | 0x20   // VBlankは常に立つ（最初はOK）
+  return v
 }
+
 
   writeRegister(port, value) {
     if (port === 0) {
@@ -465,16 +466,11 @@ const pc = cpu.pc
 
 const b1  = bus.read(pc + 1)
 const b2  = bus.read(pc + 2)
-if (!this.getFlag(this.FLAG_I) && (bus.irqStatus & 0x07)) {
-  this.irq()
-}
+//if (!this.getFlag(this.FLAG_I) && (bus.irqStatus & 0x07)) {
+//  this.irq()
+//}
 
-  console.log(
-    "PC", hex16(this.pc - 1),
-    "OP", hex8(op),
-    "A", hex8(this.a),
-    "MPR", [...this.bus.mpr].map(hex8).join(" ")
-  )
+ 
 
 
 if (this.pc == 0x0000) {
@@ -786,18 +782,12 @@ case 0x43: { // TMA #imm
 
       // RTI
      case 0x40: { // RTI
-console.error(
-    "[RTI]",
-    "PC(before)=", hex16(this.pc),
-    "SP=", hex8(this.sp),
-    
-  )
+
   this.p = (this.pop() & 0xEF) | 0x20
   const pcl = this.pop()
   const pch = this.pop()
   this.pc = (pch << 8) | pcl
   this.inIRQ = false
-console.error("[RTI] PC(after)=", hex16(this.pc))
 
   this.cycles += 6
   break
@@ -953,15 +943,15 @@ class Bus {
     
     // RAM: $0000-$1FFF
     // ---- HuC6280 ベクタ ----
+// RESET / IRQ / BRK ベクタは常に最終 8KB ROM
 if (
   addr === 0xFFFE || addr === 0xFFFF || // RESET
-  addr === 0xFFF6 || addr === 0xFFF7    // BRK / IRQ
+  addr === 0xFFF6 || addr === 0xFFF7    // IRQ / BRK
 ) {
-  const page = 7                     // $E000-$FFFF
-  const bank = this.mpr[page] - 0x80
-  const offset = addr & 0x1FFF
-  return this.rom[(bank * 0x2000) + offset] ?? 0
+  const base = this.rom.length - 0x2000
+  return this.rom[base + (addr & 0x1FFF)] ?? 0
 }
+
     
     // I/O: $0000-$1FFF (mirrored with RAM in some configs)
     // VDC: $0000-$03FF
@@ -1037,7 +1027,8 @@ if (addr >= 0x0000 && addr <= 0x0003) {
   return
 }
 if (addr >= 0x0000 && addr <= 0x0003) {
-  this.vdc.writeRegister(addr & 3, value)
+ this.vdc.writeRegister(addr & 3, val)
+
   return
 }
 
