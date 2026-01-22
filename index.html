@@ -351,6 +351,7 @@ reset() {
 
 
 doIRQ(vector) {
+console.log('[IRQ]', 'PC=', this.pc.toString(16))
   if (this.p & this.FLAG_I) return
   if (this.inIRQ) return
 
@@ -370,6 +371,12 @@ this.setFlag(this.FLAG_I, true)
   this.pc = (hi << 8) | lo
 }
 
+fetchSigned8() {
+  const v = this.bus.read(this.pc)
+  this.pc = (this.pc + 1) & 0xffff
+  return (v & 0x80) ? v - 0x100 : v
+}
+
 
   push(val) {
   this.bus.write(0x0100 | this.sp, val & 0xff)
@@ -386,8 +393,12 @@ tickTimer() {
 
 pop() {
   this.sp = (this.sp + 1) & 0xff
-  return this.bus.read(0x0100 | this.sp)
+  const addr = 0x0100 | this.sp
+  const v = this.bus.read(addr)
+  console.log('[POP]', addr.toString(16), v.toString(16))
+  return v
 }
+
 
 
   updateNZ(val) {
@@ -560,6 +571,20 @@ case 0x7F: {
   this.cycles += 5
   break
 }
+case 0x0F: { // BBR0 zp,rel
+  const zp = this.imm()
+  const offset = this.imm()
+  const val = this.bus.read(zp)
+
+  if ((val & 0x01) === 0) {
+    const disp = (offset & 0x80) ? offset - 0x100 : offset
+    this.pc = (this.pc + disp) & 0xFFFF
+  }
+
+  this.cycles += 6
+  break
+}
+
 case 0xAF: { // LAX abs
   const addr = this.abs()
   const v = this.bus.read(addr)
@@ -569,12 +594,22 @@ case 0xAF: { // LAX abs
   this.cycles += 4
   break
 }
-case 0x32: { // SAX zp
-  const a = this.zp()
-  this.bus.write(a, this.a & this.x)
-  this.cycles += 3
+
+
+case 0x32: { // BSR rel
+  const offset = this.fetchSigned8()
+
+  // ★ 次の命令の PC を push
+  const ret = this.pc & 0xffff
+  this.push((ret >> 8) & 0xff)
+  this.push(ret & 0xff)
+
+  // 分岐
+  this.pc = (this.pc + offset) & 0xffff
+  this.cycles += 8
   break
 }
+
 
 case 0x64: { // STZ zp
   const a = this.zp()
@@ -818,15 +853,14 @@ case 0x43: { // TMA #imm
 
 
       // RTS
-      case 0x60: {
-        const lo = this.pop()
-        const hi = this.pop()
-        this.pc = (((hi << 8) | lo) + 1) & 0xffff
+      case 0x60: { // RTS (HuC6280)
+  const lo = this.pop()
+  const hi = this.pop()
+  this.pc = ((hi << 8) | lo) & 0xffff
+  this.cycles += 6
+  break
+}
 
-        //this.pc = ((hi << 8) | lo) + 1 & 0xffff
-        this.cycles += 6
-        break
-      }
 
       // SBC
       case 0xe9: { const val = this.bus.read(this.imm()); this.sbc(val); this.cycles += 2; break }
@@ -963,7 +997,9 @@ class Bus {
 
   read(addr) {
     addr &= 0xffff
-    
+    if (addr < 0x2000) {
+    return this.ram[addr]
+  }
     // RAM: $0000-$1FFF
     // ---- HuC6280 ベクタ ----
 // RESET / IRQ / BRK ベクタは常に最終 8KB ROM
@@ -1043,7 +1079,10 @@ if (addr >= 0x0000 && addr <= 0x0003) {
     
     // RAM: $0000-$1FFF
     
-    
+    if (addr < 0x2000) {
+    this.ram[addr] = val
+    return
+  }
     // VDC: $0000-$03FF
     if (addr === 0x0000) {
   this.vdc.writeAddress(val)
