@@ -887,14 +887,36 @@ case 0x02: { // SXY
   this.cycles += 3
   break
 }
-case 0x9B: { // STZ abs
-  const lo = this.fetch()
-  const hi = this.fetch()
-  const addr = (hi << 8) | lo
-  this.bus.write(addr, 0x00)
-  this.cycles += 5
+case 0x9B: { // TYS (HuC6280)
+  this.sp = this.y
+  this.cycles += 3
   break
 }
+case 0x73: { // TII
+  const srcLo = this.fetch()
+  const srcHi = this.fetch()
+  const dstLo = this.fetch()
+  const dstHi = this.fetch()
+  const lenLo = this.fetch()
+  const lenHi = this.fetch()
+
+  let src = (srcHi << 8) | srcLo
+  let dst = (dstHi << 8) | dstLo
+  let len = (lenHi << 8) | lenLo
+
+  while (len !== 0) {
+    const v = this.bus.read(src)
+    this.bus.write(dst, v)
+    src = (src + 1) & 0xffff
+    dst = (dst + 1) & 0xffff
+    len = (len - 1) & 0xffff
+  }
+
+  // サイクル数は BIOS 的には厳密でなくても起動可
+  this.cycles += 6 + len * 6
+  break
+}
+
 
 
       // ROL
@@ -929,7 +951,9 @@ case 0x9B: { // STZ abs
       case 0x60: { // RTS (HuC6280)
   const lo = this.pop()
   const hi = this.pop()
-  this.pc = ((hi << 8) | lo) & 0xffff
+  this.pc = (((hi << 8) | lo) + 1) & 0xffff
+
+  //this.pc = ((hi << 8) | lo) & 0xffff
   this.cycles += 6
   break
 }
@@ -954,8 +978,24 @@ case 0x9B: { // STZ abs
       case 0x85: this.bus.write(this.zp(), this.a); this.cycles += 3; break
       case 0x95: this.bus.write(this.zpx(), this.a); this.cycles += 4; break
       case 0x8d: this.bus.write(this.abs(), this.a); this.cycles += 4; break
-      case 0x9d: this.bus.write(this.abx(), this.a); this.cycles += 5; break
-      case 0x99: this.bus.write(this.aby(), this.a); this.cycles += 5; break
+      case 0x9D: { // STA abs,X
+  const lo = this.fetch()
+  const hi = this.fetch()
+  const addr = (((hi << 8) | lo) + this.x) & 0xffff
+  this.bus.write(addr, this.a)
+  this.cycles += 5
+  break
+}
+
+    case 0x99: { // STA abs,Y
+  const lo = this.fetch()
+  const hi = this.fetch()
+  const addr = (((hi << 8) | lo) + this.y) & 0xffff
+  this.bus.write(addr, this.a)
+  this.cycles += 5
+  break
+}
+
       case 0x81: this.bus.write(this.izx(), this.a); this.cycles += 6; break
       case 0x91: this.bus.write(this.izy(), this.a); this.cycles += 6; break
 
