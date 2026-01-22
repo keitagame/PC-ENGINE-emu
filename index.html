@@ -1110,80 +1110,63 @@ this.irqStatus = 0
   }
 
   read(addr) {
-    addr &= 0xffff
-   
-    // RAM: $0000-$1FFF
-    // ---- HuC6280 ベクタ ----
-// RESET / IRQ / BRK ベクタは常に最終 8KB ROM
-if (
-  addr === 0xFFFE || addr === 0xFFFF || // RESET
-  addr === 0xFFF6 || addr === 0xFFF7    // IRQ / BRK
-) {
-  const base = this.rom.length - 0x2000
-  return this.rom[base + (addr & 0x1FFF)] ?? 0
-}
+  addr &= 0xffff;
 
-    
-    // I/O: $0000-$1FFF (mirrored with RAM in some configs)
-    // VDC: $0000-$03FF
-    // VDC
-if (addr === 0x0000) {
-  return this.vdc.readStatus()
-}
-if (addr >= 0x0000 && addr <= 0x0003) {
-  return this.vdc.readRegister(addr & 3)
-}
-
-
-    
-    // VCE (Video Color Encoder): $0400-$07FF
-    if (addr >= 0x0400 && addr <= 0x07FF) {
-      return this.readVCE(addr)
+  // 1. ハードウェア・ベクタの強制読み出し (RESET/IRQ)
+  // PCエンジンの仕様では、論理アドレス $FFF6-$FFFF は常に物理ROMの最後を参照します
+  if (addr >= 0xFFF6) {
+    const totalSize = this.rom.length;
+    // 物理ROMの末尾8KB(0x2000)の該当箇所を計算
+    const romVectorAddr = (totalSize - 0x2000) + (addr & 0x1FFF);
+    if (romVectorAddr >= 0 && romVectorAddr < totalSize) {
+      return this.rom[romVectorAddr];
     }
-    
-    // PSG (Sound): $0800-$0BFF
-    if (addr >= 0x0800 && addr <= 0x0BFF) {
-      return 0 // PSG not implemented
-    }
-    
-    // Timer: $0C00-$0FFF
-    if (addr >= 0x0C00 && addr <= 0x0FFF) {
-      return this.readTimer(addr)
-    }
-    
-    // Joypad: $1000-$13FF
-    if (addr >= 0x1000 && addr <= 0x13FF) {
-      return this.readJoypad(addr)
-    }
-    
-    // IRQ: $1400-$17FF
-    if (addr >= 0x1400 && addr <= 0x17FF) {
-      return this.readIRQ(addr)
-    }
-    if (addr < 0x2000) {
-      return this.ram[addr]
-    }
-    // Expansion: $1800-$1FFF
-    // Bus.read 内
-// IRQ / BRK vector
-
-
-
-    // Memory mapping
-    const page = (addr >> 13) & 0x07
-    const offset = addr & 0x1FFF
-    const bank = this.mpr[page]
-    
-    // ROM banks
-    if (bank >= 0x80) {
-      const romAddr = ((bank - 0x80) * 0x2000) + offset
-      if (romAddr < this.rom.length) {
-        return this.rom[romAddr]
-      }
-    }
-    
-    return 0
+    return 0xff;
   }
+
+  // 2. メモリマッピング（MPR）による判定
+  const page = (addr >> 13) & 0x07;
+  const bank = this.mpr[page];
+  const offset = addr & 0x1FFF;
+
+  // バンク $FF: I/O領域 (VDC, VCE, Timer, etc...)
+  if (bank === 0xFF) {
+    // 既存の個別判定（if addr === 0x0000等）はすべて readIO 内に隠蔽します
+    return this.readIO(offset);
+  }
+
+  // バンク $F8: ワークRAM
+  if (bank === 0xF8) {
+    return this.ram[offset];
+  }
+
+  // 3. ROM領域（それ以外のバンク）
+  const romAddr = (bank * 0x2000) + offset;
+  if (this.rom && romAddr >= 0 && romAddr < this.rom.length) {
+    return this.rom[romAddr];
+  }
+
+  return 0xff;
+}
+
+// 補助メソッド：I/O関連をここに集約
+readIO(offset) {
+  // VDC ($0000-$03FF)
+  if (offset <= 0x03FF) {
+    const reg = offset & 0x03;
+    return (reg === 0) ? this.vdc.readStatus() : this.vdc.readRegister(reg);
+  }
+  // VCE ($0400-$07FF)
+  if (offset <= 0x07FF) return this.readVCE(offset);
+  // Timer ($0C00-$0FFF)
+  if (offset <= 0x0FFF) return this.readTimer(offset);
+  // Joypad ($1000-$13FF)
+  if (offset <= 0x13FF) return this.readJoypad(offset);
+  // IRQ ($1400-$17FF)
+  if (offset <= 0x17FF) return this.readIRQ(offset);
+
+  return 0xff;
+}
 
   write(addr, val) {
     addr &= 0xffff
@@ -1379,16 +1362,19 @@ document.getElementById("rom").addEventListener("change", e => {
 
 const banks = Math.ceil(rom.length / 0x2000)
 
+const totalBanks = Math.ceil(rom.length / 0x2000);
+
 bus.mpr.set([
-  0x00,          // $0000–$1FFF RAM
-  0x01,          // $2000–$3FFF RAM mirror / I/O
-  0x80 + 0,      // $4000–$5FFF ROM
-  0x80 + 1,      // $6000–$7FFF ROM
-  0x80 + 2,      // $8000–$9FFF ROM
-  0x80 + 3,      // $A000–$BFFF ROM
-  0x80 + 4,      // $C000–$DFFF ROM
-  0x80 + (banks - 1) // $E000–$FFFF ベクタ
-])
+  0xF8,           // $0000–$1FFF: ワークRAM (物理バンク 0xF8)
+  0xFF,           // $2000–$3FFF: I/O領域 (物理バンク 0xFF)
+  0x00,           // $4000–$5FFF: ROM Bank 0
+  0x01,           // $6000–$7FFF: ROM Bank 1
+  0x02,           // $8000–$9FFF: ROM Bank 2
+  0x03,           // $A000–$BFFF: ROM Bank 3
+  0x04,           // $C000–$DFFF: ROM Bank 4
+  totalBanks - 1  // $E000–$FFFF: ROMの最終バンク (リセットベクタが含まれる)
+]);
+
 
 
     cpu.reset()
