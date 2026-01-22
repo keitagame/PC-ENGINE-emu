@@ -122,19 +122,19 @@ border:1px solid rgb(255, 255, 255);
       const lo = (n) => n & 0xff;
       const hi = (n) => (n >> 8) & 0xff;
       
-      function initMPR() {
+     function initMPR() {
   const banks = Math.ceil(this.rom.length / 0x2000)
-  const last = banks - 1
 
-  this.mpr[0] = 0x00        // RAM
-  this.mpr[1] = 0x01
-  this.mpr[2] = 0x80 + (last - 3)
-  this.mpr[3] = 0x80 + (last - 2)
-  this.mpr[4] = 0x80 + (last - 1)
-  this.mpr[5] = 0x80 + last
-  this.mpr[6] = 0x80 + last
-  this.mpr[7] = 0x80 + last
+  this.mpr[0] = 0x00 // RAM
+  this.mpr[1] = 0x01 // RAM
+  this.mpr[2] = 0x80 // ROM bank 0
+  this.mpr[3] = 0x81
+  this.mpr[4] = 0x82
+  this.mpr[5] = 0x83
+  this.mpr[6] = 0x84
+  this.mpr[7] = 0x85 // ★ ベクタはここ
 }
+
 
 function loadPCE(buf) {
   let rom = new Uint8Array(buf)
@@ -377,6 +377,11 @@ fetchSigned8() {
   return (v & 0x80) ? v - 0x100 : v
 }
 
+fetch() {
+  const v = this.bus.read(this.pc)
+  this.pc = (this.pc + 1) & 0xffff
+  return v
+}
 
   push(val) {
   this.bus.write(0x0100 | this.sp, val & 0xff)
@@ -497,6 +502,15 @@ return (((hi << 8) | lo) + this.y) & 0xffff
     this.doIRQ(0xFFF6)
     return
   }
+  if (this.bus.irqStatus) {
+  console.log(
+    '[IRQ CHECK]',
+    'PC=', this.pc.toString(16),
+    'irqStatus=', this.bus.irqStatus,
+    'P=', this.p.toString(16)
+  )
+}
+
    const pc = this.pc
   const op = this.bus.read(this.pc)
   this.pc = (this.pc + 1) & 0xffff
@@ -596,19 +610,24 @@ case 0xAF: { // LAX abs
 }
 
 
-case 0x32: { // BSR rel
-  const offset = this.fetchSigned8()
+case 0x32: { // BSR
+  // 1. 相対オフセット取得
+  let offset = this.bus.read(this.pc)
+  this.pc = (this.pc + 1) & 0xffff
+  if (offset & 0x80) offset -= 0x100
 
-  // ★ 次の命令の PC を push
-  const ret = this.pc & 0xffff
+  // 2. ★ここが超重要★
+  //    RTS は +1 するので、PC-1 を push する
+  const ret = (this.pc - 1) & 0xffff
   this.push((ret >> 8) & 0xff)
   this.push(ret & 0xff)
 
-  // 分岐
+  // 3. 分岐
   this.pc = (this.pc + offset) & 0xffff
   this.cycles += 8
   break
 }
+
 
 
 case 0x64: { // STZ zp
@@ -823,6 +842,60 @@ case 0x43: { // TMA #imm
       case 0x08: this.push(this.p | this.FLAG_B); this.cycles += 3; break
       case 0x68: this.a = this.pop(); this.updateNZ(this.a); this.cycles += 4; break
       case 0x28: this.p = (this.pop() & 0xef) | 0x20; this.cycles += 4; break
+case 0x97: { // STZ zp,X
+  const addr = (this.bus.read(this.pc++) + this.x) & 0xff
+  this.bus.write(addr, 0x00)
+  this.cycles += 4
+  break
+}
+case 0x64: { // STZ zp
+  const addr = this.bus.read(this.pc++)
+  this.bus.write(addr, 0x00)
+  this.cycles += 3
+  break
+}
+
+case 0x74: { // STZ zp,X
+  const addr = (this.bus.read(this.pc++) + this.x) & 0xff
+  this.bus.write(addr, 0x00)
+  this.cycles += 4
+  break
+}
+
+case 0x9C: { // STZ abs
+  const lo = this.bus.read(this.pc++)
+  const hi = this.bus.read(this.pc++)
+  const addr = (hi << 8) | lo
+  this.bus.write(addr, 0x00)
+  this.cycles += 4
+  break
+}
+
+case 0x9E: { // STZ abs,X
+  const lo = this.bus.read(this.pc++)
+  const hi = this.bus.read(this.pc++)
+  const addr = (((hi << 8) | lo) + this.x) & 0xffff
+
+  this.bus.write(addr, 0x00)
+  this.cycles += 5
+  break
+}
+case 0x02: { // SXY
+  const t = this.x
+  this.x = this.y
+  this.y = t
+  this.cycles += 3
+  break
+}
+case 0x9B: { // STZ abs
+  const lo = this.fetch()
+  const hi = this.fetch()
+  const addr = (hi << 8) | lo
+  this.bus.write(addr, 0x00)
+  this.cycles += 5
+  break
+}
+
 
       // ROL
       case 0x2a: { this.a = this.rol(this.a); this.cycles += 2; break }
@@ -992,7 +1065,8 @@ class Bus {
     
     // IRQ
     this.irqDisable = 0x07
-    this.irqStatus = 0
+this.irqStatus = 0
+
   }
 
   read(addr) {
@@ -1267,20 +1341,19 @@ document.getElementById("rom").addEventListener("change", e => {
     bus = new Bus(rom, vdc)
 initMPR.call(bus)
     cpu = new HuC6280(bus)
-const romBanks = Math.ceil(rom.length / 0x2000)
-console.log("romBank:"+romBanks);
-const last = romBanks - 1   // 47
+const banks = Math.ceil(rom.length / 0x2000)
 
 bus.mpr.set([
-  0x00,           // $0000-$1FFF RAM
-  0x01,           // $2000-$3FFF RAM mirror / IO
-  0x02,           // $4000-$5FFF
-  0x03,           // $6000-$7FFF
-  0x80 + last-3,  // $8000-$9FFF
-  0x80 + last-2,  // $A000-$BFFF
-  0x80 + last-1,  // $C000-$DFFF
-  0x80 + last     // $E000-$FFFF ← RESET
+  0x00,
+  0x01,
+  0x80 + 0,
+  0x80 + 1,
+  0x80 + 2,
+  0x80 + 3,
+  0x80 + 4,
+  0x80 + (banks - 1) // ベクタは最終バンク
 ])
+
 
     cpu.reset()
     //run()
