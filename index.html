@@ -1111,9 +1111,7 @@ this.irqStatus = 0
 
   read(addr) {
     addr &= 0xffff
-    if (addr < 0x2000) {
-    return this.ram[addr]
-  }
+   
     // RAM: $0000-$1FFF
     // ---- HuC6280 ベクタ ----
 // RESET / IRQ / BRK ベクタは常に最終 8KB ROM
@@ -1193,10 +1191,7 @@ if (addr >= 0x0000 && addr <= 0x0003) {
     
     // RAM: $0000-$1FFF
     
-    if (addr < 0x2000) {
-    this.ram[addr] = val
-    return
-  }
+    
     // VDC: $0000-$03FF
     if (addr === 0x0000) {
   this.vdc.writeAddress(val)
@@ -1379,19 +1374,20 @@ document.getElementById("rom").addEventListener("change", e => {
 
     vdc = new VDC(ctx)
     bus = new Bus(rom, vdc)
-initMPR.call(bus)
+//initMPR.call(bus)
     cpu = new HuC6280(bus)
+
 const banks = Math.ceil(rom.length / 0x2000)
 
 bus.mpr.set([
-  0x00,
-  0x01,
-  0x80 + 0,
-  0x80 + 1,
-  0x80 + 2,
-  0x80 + 3,
-  0x80 + 4,
-  0x80 + (banks - 1) // ベクタは最終バンク
+  0x00,          // $0000–$1FFF RAM
+  0x01,          // $2000–$3FFF RAM mirror / I/O
+  0x80 + 0,      // $4000–$5FFF ROM
+  0x80 + 1,      // $6000–$7FFF ROM
+  0x80 + 2,      // $8000–$9FFF ROM
+  0x80 + 3,      // $A000–$BFFF ROM
+  0x80 + 4,      // $C000–$DFFF ROM
+  0x80 + (banks - 1) // $E000–$FFFF ベクタ
 ])
 
 
