@@ -136,17 +136,17 @@ border:1px solid rgb(255, 255, 255);
 }
 
 
-function loadPCE(buf) {
-  let rom = new Uint8Array(buf)
-
-  // 512byte ヘッダ除去
-  if ((rom.length & 0x1FFF) !== 0) {
-    console.warn("512byte header detected, stripping")
-    rom = rom.slice(512)
+// loadPCE の実装イメージ
+function loadPCE(arrayBuffer) {
+  let data = new Uint8Array(arrayBuffer);
+  // 512バイトのヘッダがある場合（サイズが8Kで割り切れない場合など）
+  if (data.length % 0x2000 !== 0) {
+    console.log("ROM header (512 bytes) detected and skipped.");
+    data = data.slice(512);
   }
-
-  return rom
+  return data;
 }
+
 
 
 class VDC {
@@ -892,6 +892,16 @@ case 0x9B: { // TYS (HuC6280)
   this.cycles += 3
   break
 }
+// HuC6280.step 内の switch 文に追加
+case 0xD4: // CSH (Set High-speed mode)
+  // 速度切り替えのフラグがあれば更新、なければ空でOK
+  this.cycles += 3; 
+  break;
+
+case 0x54: // CSL (Set Low-speed mode)
+  this.cycles += 3;
+  break;
+
 case 0x73: { // TII
   const srcLo = this.fetch()
   const srcHi = this.fetch()
@@ -1113,16 +1123,7 @@ this.irqStatus = 0
   addr &= 0xffff;
 
   // 1. ハードウェア・ベクタの強制読み出し (RESET/IRQ)
-  // PCエンジンの仕様では、論理アドレス $FFF6-$FFFF は常に物理ROMの最後を参照します
-  if (addr >= 0xFFF6) {
-    const totalSize = this.rom.length;
-    // 物理ROMの末尾8KB(0x2000)の該当箇所を計算
-    const romVectorAddr = (totalSize - 0x2000) + (addr & 0x1FFF);
-    if (romVectorAddr >= 0 && romVectorAddr < totalSize) {
-      return this.rom[romVectorAddr];
-    }
-    return 0xff;
-  }
+  
 
   // 2. メモリマッピング（MPR）による判定
   const page = (addr >> 13) & 0x07;
@@ -1171,9 +1172,31 @@ readIO(offset) {
   write(addr, val) {
     addr &= 0xffff
     val &= 0xff
-    
+    const page = (addr >> 13) & 0x07;
+  const bank = this.mpr[page];
+  const offset = addr & 0x1FFF;
+if (bank === 0xFF) { 
+  if (offset >= 0x1FF0 && offset <= 0x1FF7) {
+    this.mpr[offset & 0x07] = val; // ここで物理バンクが正しく更新されること
+    return;
+  }
+}
     // RAM: $0000-$1FFF
-    
+    if (bank === 0xFF) {
+    // MPRの書き込み ($1FF0-$1FF7)
+    if (offset >= 0x1FF0 && offset <= 0x1FF7) {
+      this.mpr[offset & 0x07] = val;
+      return;
+    }
+    // その他のI/O書き込み
+    this.writeIO(offset, val); 
+    return;
+  }
+
+  if (bank === 0xF8) {
+    this.ram[offset] = val;
+    return;
+  }
     
     // VDC: $0000-$03FF
     if (addr === 0x0000) {
@@ -1221,6 +1244,9 @@ if (addr >= 0x0000 && addr <= 0x0003) {
       this.ram[addr] = val
       return
     }
+// write(addr, val) の中
+
+
     // MPR: Memory mapping
     if (addr >= 0x1FF0 && addr <= 0x1FF7) {
       this.mpr[addr & 0x07] = val
@@ -1364,16 +1390,11 @@ const banks = Math.ceil(rom.length / 0x2000)
 
 const totalBanks = Math.ceil(rom.length / 0x2000);
 
-bus.mpr.set([
-  0xF8,           // $0000–$1FFF: ワークRAM (物理バンク 0xF8)
-  0xFF,           // $2000–$3FFF: I/O領域 (物理バンク 0xFF)
-  0x00,           // $4000–$5FFF: ROM Bank 0
-  0x01,           // $6000–$7FFF: ROM Bank 1
-  0x02,           // $8000–$9FFF: ROM Bank 2
-  0x03,           // $A000–$BFFF: ROM Bank 3
-  0x04,           // $C000–$DFFF: ROM Bank 4
-  totalBanks - 1  // $E000–$FFFF: ROMの最終バンク (リセットベクタが含まれる)
-]);
+// リセット直後は物理バンク0がMPR7に見えている必要がある
+bus.mpr.set([0xFF, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+
+
 
 
 
