@@ -654,16 +654,18 @@ case 0x9E: { // STZ abs,X
   this.cycles += 5
   break
 }
-case 0x53: { // TAM #imm
-  const mask = this.bus.read(this.pc++)
+case 0x53: { // TAM imm
+   console.log("EXEC TAM at", this.pc.toString(16))
+  const mask = this.fetch() // 即値
   for (let i = 0; i < 8; i++) {
     if (mask & (1 << i)) {
-      this.bus.mpr[i] = this.a
+      this.bus.mpr[i] = this.a & 0xFF
     }
   }
-  this.cycles += 5
+  this.cycles += 4
   break
 }
+
 case 0x43: { // TMA #imm
   const mask = this.bus.read(this.pc++)
   for (let i = 0; i < 8; i++) {
@@ -1026,6 +1028,9 @@ case 0x73: { // TII
       case 0x8a: this.a = this.x; this.updateNZ(this.a); this.cycles += 2; break
       case 0x9a: this.sp = this.x; this.cycles += 2; break
       case 0x98: this.a = this.y; this.updateNZ(this.a); this.cycles += 2; break
+case 0xFF: // UNDEFINED → NOP
+  this.cycles += 2
+  break
 
       default:
 throw new Error(
@@ -1149,6 +1154,46 @@ this.irqStatus = 0
 
   return 0xff;
 }
+writeIO(offset, val) {
+  // ===== VDC ($0000-$03FF) =====
+  if (offset <= 0x03FF) {
+    const reg = offset & 0x03
+    this.vdc.writeRegister(reg, val)
+    return
+  }
+
+  // ===== VCE ($0400-$07FF) =====
+  if (offset <= 0x07FF) {
+    this.writeVCE(offset, val)
+    return
+  }
+
+  // ===== PSG ($0800-$0BFF) =====
+  if (offset <= 0x0BFF) {
+    // 起動確認では未実装でOK
+    return
+  }
+
+  // ===== Timer ($0C00-$0FFF) =====
+  if (offset <= 0x0FFF) {
+    this.writeTimer(offset, val)
+    return
+  }
+
+  // ===== Joypad ($1000-$13FF) =====
+  if (offset <= 0x13FF) {
+    this.writeJoypad(offset, val)
+    return
+  }
+
+  // ===== IRQ ($1400-$17FF) =====
+  if (offset <= 0x17FF) {
+    this.writeIRQ(offset, val)
+    return
+  }
+
+  // それ以外は無視
+}
 
 // 補助メソッド：I/O関連をここに集約
 readIO(offset) {
@@ -1170,39 +1215,33 @@ readIO(offset) {
 }
 
   write(addr, val) {
-    addr &= 0xffff
-    val &= 0xff
-    const page = (addr >> 13) & 0x07;
-  const bank = this.mpr[page];
-  const offset = addr & 0x1FFF;
-if (bank === 0xFF) { 
-  if (offset >= 0x1FF0 && offset <= 0x1FF7) {
-    this.mpr[offset & 0x07] = val; // ここで物理バンクが正しく更新されること
-    return;
-  }
-}
-    // RAM: $0000-$1FFF
-    if (bank === 0xFF) {
-    // MPRの書き込み ($1FF0-$1FF7)
-    if (offset >= 0x1FF0 && offset <= 0x1FF7) {
-      this.mpr[offset & 0x07] = val;
-      return;
-    }
-    // その他のI/O書き込み
-    this.writeIO(offset, val); 
-    return;
+  addr &= 0xFFFF
+  val &= 0xFF
+
+  const page = (addr >> 13) & 0x07
+  const offset = addr & 0x1FFF
+
+  // ===== MPR write ($1FF0-$1FF7 in page 0) =====
+  if (page === 0 && offset >= 0x1FF0 && offset <= 0x1FF7) {
+    this.mpr[offset & 0x07] = val
+    return
   }
 
-  if (bank === 0xF8) {
-    this.ram[offset] = val;
-    return;
+  const bank = this.mpr[page]
+
+  // ===== I/O =====
+  if (bank === 0xFF) {
+    this.writeIO(offset, val)
+    return
   }
+
+  // ===== RAM =====
+  if (bank === 0xF8) {
+    this.ram[offset] = val
+    return
+  }
+// VDC: $0000-$03FF
     
-    // VDC: $0000-$03FF
-    if (addr === 0x0000) {
-  this.vdc.writeAddress(val)
-  return
-}
 if (addr >= 0x0000 && addr <= 0x0003) {
  this.vdc.writeRegister(addr & 3, val)
 
@@ -1252,8 +1291,13 @@ if (addr >= 0x0000 && addr <= 0x0003) {
       this.mpr[addr & 0x07] = val
       return
     }
+  // ===== ROM (ignore write) =====
+}
 
-  }
+    
+    
+
+  
 
   readVCE(addr) {
     const reg = addr & 0x07
@@ -1389,9 +1433,22 @@ document.getElementById("rom").addEventListener("change", e => {
 const banks = Math.ceil(rom.length / 0x2000)
 
 const totalBanks = Math.ceil(rom.length / 0x2000);
+const bankCount = Math.ceil(rom.length / 0x2000)
+const lastBank = bankCount - 1
 
-// リセット直後は物理バンク0がMPR7に見えている必要がある
-bus.mpr.set([0xFF, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+bus.mpr.set([
+  0xFF,       // 0000-1FFF I/O
+  0xF8,       // 2000-3FFF RAM
+  0x00 % bankCount,
+  0x01 % bankCount,
+  0x02 % bankCount,
+  0x03 % bankCount,
+  0x04 % bankCount,
+  lastBank   // ★ E000-FFFF = ROM最終バンク
+])
+
+
+
 
 
 
