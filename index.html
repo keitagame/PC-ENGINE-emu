@@ -721,13 +721,14 @@ console.log("RESET VECTOR:",
 
         // Stack lives at $2100–$21FF (page 1 = RAM bank 0xF8, offset $0100)
         push(v) {
-          this.wb(0x2100 | this.sp, v);
-          this.sp = (this.sp - 1) & 0xff;
-        }
-        pop() {
-          this.sp = (this.sp + 1) & 0xff;
-          return this.rb(0x2100 | this.sp);
-        }
+  this.wb(0x0100 | this.sp, v);
+  this.sp = (this.sp - 1) & 0xff;
+}
+
+pop() {
+  this.sp = (this.sp + 1) & 0xff;
+  return this.rb(0x0100 | this.sp);
+}
 
         fetch() {
           const v = this.rb(this.pc);
@@ -808,11 +809,13 @@ console.log("RESET VECTOR:",
         _sbc(v) {
           this._adc(v ^ 0xff);
         }
-        _cmp(reg, v) {
-          const r = (reg - v) & 0x1ff;
-          this.sf(this.C, r < 0x100);
-          this.nz(r & 0xff);
-        }
+_cmp(reg, v) {
+  const t = (reg - v) & 0xff;
+
+  this.sf(this.C, reg >= v);        // ← 直接比較が正解
+  this.sf(this.Z, t === 0);
+  this.sf(this.N, (t & 0x80) !== 0);
+}
         _asl(v) {
           this.sf(this.C, (v & 0x80) !== 0);
           return this.nz((v << 1) & 0xff);
@@ -858,27 +861,46 @@ console.log("RESET VECTOR:",
         step() {
           // IRQ check
           if (!this.fI()) {
+           
             const pend = this.bus.irqStatus & ~this.bus.irqMask;
-            if (pend & 2) {
-              this.bus.irqStatus &= ~2;
-              this._irq(0xfff8);
-              return;
-            } // IRQ1
-            if (pend & 4) {
-              this.bus.irqStatus &= ~4;
-              this._irq(0xfffa);
-              return;
-            } // Timer
-            if (pend & 1) {
-              this.bus.irqStatus &= ~1;
-              this._irq(0xfff6);
-              return;
-            } // IRQ2
+            //if (pend & 2) {
+            //  this.bus.irqStatus &= ~2;
+            //  this._irq(0xfff8);
+           //   return;
+           // } // IRQ1
+           // if (pend & 4) {
+          //    this.bus.irqStatus &= ~4;
+          //    this._irq(0xfffa);
+          //    return;
+          //  } // Timer
+          //  if (pend & 1) {
+          //    this.bus.irqStatus &= ~1;
+         //     this._irq(0xfff6);
+         //     return;
+         //   } // IRQ2
+         if (pend & 2) {
+  this.bus.irqStatus &= ~2;
+  this._irq(0xfff8);  // IRQ1
+  return;
+}
+if (pend & 1) {
+  this.bus.irqStatus &= ~1;
+  this._irq(0xfff6);  // IRQ2
+  return;
+}
+if (pend & 4) {
+  this.bus.irqStatus &= ~4;
+  this._irq(0xfffa);  // Timer
+  return;
+}
           }
 
           const op = this.fetch();
           let a, v, t;
-
+//console.log(
+//  this.pc.toString(16),
+ // op.toString(16)
+//);
           switch (op) {
             // ADC
             case 0x69:
@@ -1480,7 +1502,8 @@ console.log("RESET VECTOR:",
             case 0x60: {
               const l3 = this.pop();
               const h3 = this.pop();
-              this.pc = ((h3 << 8) | (l3 + 1)) & 0xffff;
+                this.pc = (((h3 << 8) | l3) + 1) & 0xffff;
+              //this.pc = ((h3 << 8) | (l3 + 1)) & 0xffff;
               this.cyc += 6;
               break;
             }
@@ -1945,10 +1968,16 @@ console.log("RESET VECTOR:",
         //    0x04 % nBanks, // page 6
         //    nBanks - 1, // page 7: $E000–$FFFF → last ROM bank (reset vectors)
        //   ]);
-
-for (let i = 0; i < 8; i++) {
-  bus.mpr[i] = i < nBanks ? i : 0;
-}
+//for (let i = 0; i < 8; i++) {
+  //bus.mpr[i] = i;
+//}
+//bus.mpr[7] = nBanks - 1;
+//bus.mpr[0] = 0xff;
+//bus.mpr[1] = 0xf8;
+//for (let i = 2; i < 8; i++) bus.mpr[i] = i;
+//for (let i = 0; i < 8; i++) {
+ // bus.mpr[i] = i < nBanks ? i : 0;
+//}
           cpu.reset();
           document.getElementById("start").textContent = "Start";
           statusEl.textContent = "ROM Loaded – Press Start";
