@@ -1935,16 +1935,16 @@ console.log("RESET VECTOR:",
           cpu = new CPU(bus);
 
           // MPR setup
-          bus.mpr.set([
-            0xff, // page 0: $0000–$1FFF → I/O
-            0xf8, // page 1: $2000–$3FFF → RAM
-            0x00 % nBanks, // page 2: $4000–$5FFF
-            0x01 % nBanks, // page 3
-            0x02 % nBanks, // page 4
-            0x03 % nBanks, // page 5
-            0x04 % nBanks, // page 6
-            nBanks - 1, // page 7: $E000–$FFFF → last ROM bank (reset vectors)
-          ]);
+         // bus.mpr.set([
+         //   0xff, // page 0: $0000–$1FFF → I/O
+         //   0xf8, // page 1: $2000–$3FFF → RAM
+         //   0x00 % nBanks, // page 2: $4000–$5FFF
+        //    0x01 % nBanks, // page 3
+        //    0x02 % nBanks, // page 4
+        //    0x03 % nBanks, // page 5
+        //    0x04 % nBanks, // page 6
+        //    nBanks - 1, // page 7: $E000–$FFFF → last ROM bank (reset vectors)
+       //   ]);
 
 for (let i = 0; i < 8; i++) {
   bus.mpr[i] = i < nBanks ? i : 0;
