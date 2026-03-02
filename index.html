@@ -114,7 +114,11 @@
       // ════════════════════════════════════════════════════════
       function loadPCE(buf) {
         let d = new Uint8Array(buf);
-        if ((d.length & 0x1fff) === 0x200) d = d.slice(0x200);
+if (d.length % 0x2000 === 512) {
+    console.log("Header detected → stripping 512 bytes");
+    return d.slice(512);
+  }
+        //if ((d.length & 0x1fff) === 0x200) d = d.slice(0x200);
         return d;
       }
 
@@ -666,6 +670,10 @@
         }
 
         reset() {
+console.log("RESET VECTOR:",
+  bus.read(0xfffe).toString(16),
+  bus.read(0xffff).toString(16)
+);
           const lo = this.bus.read(0xfffe);
           const hi = this.bus.read(0xffff);
           this.pc = (hi << 8) | lo;
@@ -1938,6 +1946,9 @@
             nBanks - 1, // page 7: $E000–$FFFF → last ROM bank (reset vectors)
           ]);
 
+for (let i = 0; i < 8; i++) {
+  bus.mpr[i] = i < nBanks ? i : 0;
+}
           cpu.reset();
           document.getElementById("start").textContent = "Start";
           statusEl.textContent = "ROM Loaded – Press Start";
@@ -2014,7 +2025,7 @@
             console.error(err);
             return;
           }
-
+console.log(vdc.vram);
           vdc.flush(imgData);
           ctx2d.putImageData(imgData, 0, 0);
           pcEl.textContent = "0x" + h16(cpu.pc);
