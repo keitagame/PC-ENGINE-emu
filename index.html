@@ -532,6 +532,8 @@ if (d.length % 0x2000 === 512) {
 
           this.irqMask = 0x07; // all IRQs disabled
           this.irqStatus = 0x00;
+
+
         }
 
         st0(v) {
@@ -556,6 +558,7 @@ if (d.length % 0x2000 === 512) {
         }
 
         write(addr, val) {
+console.log("WRITE", addr.toString(16), val.toString(16));
           addr &= 0xffff;
           val &= 0xff;
           const page = (addr >> 13) & 7;
@@ -1956,18 +1959,28 @@ if (pend & 4) {
           joy = new Joypad();
           bus = new Bus(rom, vdc, vce, psg, joy);
           cpu = new CPU(bus);
+bus.mpr.set([
+  0xff, // page 0: I/O ($0000–$1FFF)
+  0xf8, // page 1: RAM ($2000–$3FFF)
+  0xf8, // page 2: RAM ($4000–$5FFF)
+  0xf8, // page 3: RAM ($6000–$7FFF)
+  0x00 % nBanks, // page 4: ROM ($8000–$9FFF)
+  0x01 % nBanks, // page 5: ROM
+  0x02 % nBanks, // page 6: ROM
+  nBanks - 1,    // page 7: last ROM bank ($E000–$FFFF)
+]);
 
           // MPR setup
-         // bus.mpr.set([
+          //bus.mpr.set([
          //   0xff, // page 0: $0000–$1FFF → I/O
-         //   0xf8, // page 1: $2000–$3FFF → RAM
-         //   0x00 % nBanks, // page 2: $4000–$5FFF
+        //    0xf8, // page 1: $2000–$3FFF → RAM
+        //   0x00 % nBanks, // page 2: $4000–$5FFF
         //    0x01 % nBanks, // page 3
         //    0x02 % nBanks, // page 4
         //    0x03 % nBanks, // page 5
         //    0x04 % nBanks, // page 6
         //    nBanks - 1, // page 7: $E000–$FFFF → last ROM bank (reset vectors)
-       //   ]);
+        // ]);
 //for (let i = 0; i < 8; i++) {
   //bus.mpr[i] = i;
 //}
